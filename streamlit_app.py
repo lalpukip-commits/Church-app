@@ -1,24 +1,23 @@
 import streamlit as st
 
 st.set_page_config(page_title="Church Treasury", page_icon="⛪")
-st.title("⛪ Church Treasury")
-st.markdown("Strategy: **Smallest Notes First (10s → 20s → 50s → 100s → 200s)**")
+st.title("⛪ Extreme Harmony Treasury")
+st.markdown("Strategy: **Milestone Balancing** (Small-First + Person-to-Person Trading)")
 
-# --- 1. INVENTORY ---
+# --- 1. INVENTORY INPUT ---
 with st.sidebar:
     st.header("1. Plate Inventory")
-    # Using the denominations in reverse order for the UI
-    n10 = st.number_input("10rs count", 0)
-    n20 = st.number_input("20rs count", 0)
-    n50 = st.number_input("50rs count", 0)
-    n100 = st.number_input("100rs count", 0)
-    n200 = st.number_input("200rs count", 0)
+    n10 = st.number_input("10rs notes", 0, key="inv10")
+    n20 = st.number_input("20rs notes", 0, key="inv20")
+    n50 = st.number_input("50rs notes", 0, key="inv50")
+    n100 = st.number_input("100rs notes", 0, key="inv100")
+    n200 = st.number_input("200rs notes", 0, key="inv200")
     
     inv = {10: n10, 20: n20, 50: n50, 100: n100, 200: n200}
     total_plate = sum(k * v for k, v in inv.items())
     st.metric("Total in Plate", f"₹{total_plate}")
 
-# --- 2. REQUESTS ---
+# --- 2. REQUESTS INPUT ---
 st.header("2. Shopkeeper Requests")
 num_p = st.number_input("Number of Shopkeepers", 1, 15, 3)
 
@@ -29,75 +28,86 @@ for i in range(num_p):
     notes_in = c2.number_input(f"500s brought", 0, key=f"w{i}")
     shopkeepers.append({
         "name": name, 
-        "orig": notes_in, 
-        "accepted": 0, 
+        "target": notes_in * 500, 
         "change": {10:0, 20:0, 50:0, 100:0, 200:0},
         "current_val": 0
     })
 
-# --- 3. THE CALCULATION ---
-if st.button("Distribute Small-to-Large", type="primary"):
+# --- 3. THE ENGINE ---
+if st.button("Calculate Extreme Harmony", type="primary"):
     temp_inv = inv.copy()
     
-    # Sort: Big Players (those who brought more 500s) get priority for the exchange slots
-    active_list = sorted(shopkeepers, key=lambda x: x['orig'], reverse=True)
+    # STEP A: Determine how many total 500rs units we can support
+    total_exchange_possible = (total_plate // 500) * 500
+    total_requested = sum(s['target'] for s in shopkeepers)
     
-    # Determine how many 500rs units we can actually fulfill
-    total_possible = total_plate // 500
-    
-    # Create the "Exchanges" list based on Priority
-    exchange_slots = []
-    temp_total = total_possible
-    while temp_total > 0:
-        added = False
-        for s in active_list:
-            if s['accepted'] < s['orig'] and temp_total > 0:
-                s['accepted'] += 1
-                # Each slot is one 500rs unit
-                exchange_slots.append(s)
-                temp_total -= 1
-                added = True
-        if not added: break
-
-    # PHASE 1: THE SMALL-FIRST DISTRIBUTION
-    # We loop through denominations from 10 up to 200
+    # STEP B: INITIAL SMALL-TO-LARGE DEAL
+    # We distribute everything in the plate until the plate is empty or everyone is full
     for d in [10, 20, 50, 100, 200]:
-        # Keep dealing this specific note as long as we have them
         while temp_inv[d] > 0:
-            notes_dealt_this_round = False
-            for s in exchange_slots:
-                # Only give note if it doesn't push the individual 500rs unit over 500
-                # AND if the person's TOTAL change for all their 500s isn't already "full"
-                if s['current_val'] + d <= (s['accepted'] * 500) and temp_inv[d] > 0:
+            dealt = False
+            # Sort shopkeepers: those who are NOT yet at their target get priority
+            for s in sorted(shopkeepers, key=lambda x: x['target'], reverse=True):
+                if s['current_val'] + d <= s['target'] and temp_inv[d] > 0:
                     s['change'][d] += 1
                     s['current_val'] += d
                     temp_inv[d] -= 1
-                    notes_dealt_this_round = True
-            
-            # If we went through everyone and couldn't give out a single note of this type, move to next denomination
-            if not notes_dealt_this_round:
-                break
+                    dealt = True
+            if not dealt: break
+
+    # STEP C: THE "HARMONY SWAP" (Person-to-Person Trading)
+    # We loop to see if we can move notes from "Over" or "Incomplete" people to help others hit milestones
+    for _ in range(10): # Run multiple balancing passes
+        # Sort by who is CLOSEST to their next 500 milestone but not quite there
+        shopkeepers.sort(key=lambda x: (x['current_val'] % 500) if x['current_val'] < x['target'] else 0, reverse=True)
+        
+        for receiver in shopkeepers:
+            if receiver['current_val'] > 0 and receiver['current_val'] % 500 != 0:
+                needed = 500 - (receiver['current_val'] % 500)
+                
+                # Try to take 'needed' amount from others who have notes to spare
+                for giver in shopkeepers:
+                    if giver == receiver: continue
+                    
+                    for d in [50, 20, 10]: # Prefer trading small notes
+                        while giver['change'][d] > 0 and needed >= d:
+                            giver['change'][d] -= 1
+                            giver['current_val'] -= d
+                            receiver['change'][d] += 1
+                            receiver['current_val'] += d
+                            needed -= d
+
+    # STEP D: FINAL PLATE TOP-UP
+    # Use any leftover 100s/200s to try and hit milestones
+    for s in shopkeepers:
+        for d in [200, 100, 50, 20, 10]:
+            while s['current_val'] + d <= s['target'] and temp_inv[d] > 0:
+                s['change'][d] += 1
+                s['current_val'] += d
+                temp_inv[d] -= 1
 
     # --- 4. DISPLAY RESULTS ---
     st.divider()
     st.subheader("Final Balanced Distribution")
 
     for s in shopkeepers:
-        returned = s['orig'] - s['accepted']
+        # A person is "satisfied" if they hit a multiple of 500
+        satisfied_count = s['current_val'] // 500
+        returned_notes = (s['target'] // 500) - satisfied_count
         
-        if s['orig'] > 0:
-            with st.expander(f"👤 {s['name']} (Exchanged: {s['accepted']} | Returned: {returned})"):
-                if s['accepted'] == 0:
-                    st.error("Could not fulfill exchange - Lack of change in plate.")
-                else:
-                    if returned > 0:
-                        st.warning(f"{returned} note(s) of 500rs returned to shopkeeper.")
-                    
-                    # Display notes from Smallest to Largest
-                    for d in [10, 20, 50, 100, 200]:
-                        if s['change'][d] > 0:
-                            st.write(f"**₹{d}:** {s['change'][d]} notes")
-                    st.write(f"---")
-                    st.write(f"**Total Received:** ₹{s['current_val']}")
+        with st.expander(f"👤 {s['name']} (Exchanged: {satisfied_count} | Returned: {returned_notes})"):
+            if s['current_val'] == 0:
+                st.error("No exchange possible for this person.")
+            else:
+                if returned_notes > 0:
+                    st.warning(f"Note: {returned_notes} of your 500rs notes were returned (lack of change).")
+                
+                for d in [10, 20, 50, 100, 200]:
+                    if s['change'][d] > 0:
+                        st.write(f"**₹{d}:** {s['change'][d]} notes")
+                
+                st.write(f"**Total Received:** ₹{s['current_val']}")
+                if s['current_val'] % 500 != 0:
+                    st.info(f"⚠️ This person is off-milestone by ₹{s['current_val'] % 500}. Manual adjustment may be needed.")
 
-    st.info(f"**Leftover in Plate:** ₹{sum(k*v for k,v in temp_inv.items())}")
+    st.info(f"**Remaining in Plate:** ₹{sum(k*v for k,v in temp_inv.items())}")
