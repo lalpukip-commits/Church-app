@@ -1,94 +1,86 @@
 import streamlit as st
-import random
 
 st.set_page_config(page_title="Church Treasury", page_icon="⛪")
+st.title("⛪ Church Treasury")
+st.markdown("Rules: **Big Players First** + **The Harmony Swap**")
 
-st.title("⛪ Church Treasury Logic")
-st.info("Goal: Fair small notes first, then fill the rest with whatever is available.")
-
-# --- 1. Inventory ---
+# --- 1. INVENTORY (Starts at 0) ---
 with st.sidebar:
     st.header("1. Plate Inventory")
-    n200 = st.number_input("200rs count", 0, value=0)
-    n100 = st.number_input("100rs count", 0, value=0)
-    n50 = st.number_input("50rs count", 0, value=0)
-    n20 = st.number_input("20rs count", 0, value=0)
-    n10 = st.number_input("10rs count", 0, value=0)
-    
-    inv = {200: n200, 100: n100, 50: n50, 20: n20, 10: n10}
+    inv = {
+        200: st.number_input("200rs notes", 0),
+        100: st.number_input("100rs notes", 0),
+        50: st.number_input("50rs notes", 0),
+        20: st.number_input("20rs notes", 0),
+        10: st.number_input("10rs notes", 0)
+    }
     total_plate = sum(k * v for k, v in inv.items())
-    st.metric("Total in Plate", f"₹{total_plate}")
+    st.metric("Total Money", f"₹{total_plate}")
 
-# --- 2. Requests ---
-st.header("2. Request List")
-num_p = st.number_input("How many shopkeepers?", 1, 15, 1)
+# --- 2. REQUESTS ---
+st.header("2. Shopkeeper Requests")
+num_p = st.number_input("Number of Shopkeepers", 1, 15, 1)
 
-people_data = []
+shopkeepers = []
 for i in range(num_p):
     c1, c2 = st.columns([2, 1])
-    name = c1.text_input(f"Name", f"Shopkeeper {i+1}", key=f"n{i}")
-    wants = c2.number_input(f"500s", 1, 10, 1, key=f"w{i}")
-    people_data.append({"name": name, "wants": wants, "got": 0, "returned": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
+    name = c1.text_input(f"Name", f"Person {i+1}", key=f"n{i}")
+    notes_in = c2.number_input(f"500s brought", 0, key=f"w{i}")
+    shopkeepers.append({"name": name, "orig": notes_in, "got": 0, "change": {200:0, 100:0, 50:0, 20:0, 10:0}})
 
-# --- 3. The Logic ---
-if st.button("Distribute Now", type="primary"):
+# --- 3. THE CALCULATION ---
+if st.button("Distribute Change", type="primary"):
     temp_inv = inv.copy()
+    current_plate = total_plate
     
-    # PHASE 1: REJECTION (Take from those with most if short)
-    current_req = sum(p["wants"] for p in people_data) * 500
-    while current_req > total_plate:
-        # Prioritize taking from those with > 1 note
-        rich = [p for p in people_data if p["wants"] > 1]
-        target = random.choice(rich) if rich else random.choice([p for p in people_data if p["wants"] > 0])
-        target["wants"] -= 1
-        target["returned"] += 1
-        current_req -= 500
+    # Sort by who brought the most notes (Big Players First)
+    active_list = sorted(shopkeepers, key=lambda x: x['orig'], reverse=True)
 
-    # Create individual 500rs "buckets"
-    buckets = []
-    for p_idx, p in enumerate(people_data):
-        for _ in range(p["wants"]):
-            buckets.append({"p_idx": p_idx, "sum": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
-
-    # PHASE 2: HARMONY DEAL (10s, 20s, 50s one by one)
-    for d in [10, 20, 50]:
-        while temp_inv[d] > 0:
-            changed = False
-            for b in buckets:
-                if b["sum"] + d <= 500 and temp_inv[d] > 0:
-                    b["notes"][d] += 1
-                    b["sum"] += d
-                    temp_inv[d] -= 1
-                    changed = True
-            if not changed: break
-
-    # PHASE 3: AGGRESSIVE FILL (Finish the 500s with anything left)
-    for b in buckets:
-        for d in [200, 100, 50, 20, 10]:
-            while b["sum"] + d <= 500 and temp_inv[d] > 0:
-                b["notes"][d] += 1
-                b["sum"] += d
-                temp_inv[d] -= 1
-
-    # PHASE 4: FINAL SETTLE
-    for b in buckets:
-        p = people_data[b["p_idx"]]
-        if b["sum"] == 500:
-            p["got"] += 1
-            for d in [10, 20, 50, 100, 200]:
-                p["notes"][d] += b["notes"][d]
-        else:
-            p["returned"] += 1 # Only if plate is truly empty
-
-    # --- 4. DISPLAY ---
-    st.divider()
-    for p in people_data:
-        if p["returned"] > 0:
-            st.error(f"⚠️ **{p['name']}**: {p['returned']} note(s) given back (lack of change).")
-        
-        with st.expander(f"👤 {p['name']} (Exchanged: {p['got']})"):
-            if p["got"] > 0:
+    # PHASE 1: DISTRIBUTION (One 500 at a time)
+    # We keep looping as long as we have 500rs in change
+    while current_plate >= 500:
+        found_someone = False
+        for s in active_list:
+            if s['got'] < s['orig'] and current_plate >= 500:
+                # Give 1 unit of 500rs
+                s['got'] += 1
+                current_plate -= 500
+                found_someone = True
+                
+                # Fill the 500rs using largest notes first for now
+                rem = 500
                 for d in [200, 100, 50, 20, 10]:
-                    if p["notes"][d] > 0:
-                        st.write(f"**{d}rs:** {p['notes'][d]} notes")
-            else: st.write("No notes exchanged.")
+                    while rem >= d and temp_inv[d] > 0:
+                        s['change'][d] += 1
+                        temp_inv[d] -= 1
+                        rem -= d
+        if not found_someone: break
+
+    # PHASE 2: THE HARMONY SWAP (Mixing 10s and 20s)
+    # We look for people who have 20s and others who have 10s and swap them
+    for _ in range(10): # Run a few swap cycles
+        for s1 in active_list:
+            for s2 in active_list:
+                # If s1 has 20s and s2 has 10s... swap 1x20 for 2x10
+                if s1['change'][20] >= 1 and s2['change'][10] >= 2:
+                    s1['change'][20] -= 1
+                    s1['change'][10] += 2
+                    s2['change'][10] -= 2
+                    s2['change'][20] += 1
+
+    # --- 4. DISPLAY RESULTS ---
+    st.divider()
+    for s in shopkeepers:
+        returned = s['orig'] - s['got']
+        
+        if s['got'] == 0:
+            st.error(f"❌ **{s['name']}**: NO MONEY AVAILABLE. Returned all {s['orig']} notes.")
+        else:
+            with st.expander(f"👤 {s['name']} (Exchanged: {s['got']} | Returned: {returned})"):
+                if returned > 0:
+                    st.warning(f"Note: {returned} note(s) given back due to lack of change.")
+                for d in [200, 100, 50, 20, 10]:
+                    if s['change'][d] > 0:
+                        st.write(f"**{d}rs:** {s['change'][d]} notes")
+
+    st.info(f"Remaining in Plate: ₹{current_plate}")
