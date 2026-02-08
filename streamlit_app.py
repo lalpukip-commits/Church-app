@@ -4,16 +4,16 @@ import random
 st.set_page_config(page_title="Church Treasury", page_icon="⛪")
 
 st.title("⛪ Church Treasury Logic")
-st.markdown("Status: **Maximum Harmony Mode** (Priority on 10s & 20s)")
+st.markdown("Maximum Harmony: Everyone gets a fair mix of small notes.")
 
-# --- 1. Collection Inventory ---
+# --- 1. Collection Inventory (All Presets Removed) ---
 with st.sidebar:
     st.header("1. Plate Inventory")
-    n200 = st.number_input("200rs count", 0, value=5)
-    n100 = st.number_input("100rs count", 0, value=10)
-    n50 = st.number_input("50rs count", 0, value=20)
-    n20 = st.number_input("20rs count", 0, value=50)
-    n10 = st.number_input("10rs count", 0, value=100)
+    n200 = st.number_input("200rs count", min_value=0, value=0)
+    n100 = st.number_input("100rs count", min_value=0, value=0)
+    n50 = st.number_input("50rs count", min_value=0, value=0)
+    n20 = st.number_input("20rs count", min_value=0, value=0)
+    n10 = st.number_input("10rs count", min_value=0, value=0)
     
     inv = {200: n200, 100: n100, 50: n50, 20: n20, 10: n10}
     total_plate = sum(k * v for k, v in inv.items())
@@ -21,44 +21,40 @@ with st.sidebar:
 
 # --- 2. Exchange Requests ---
 st.header("2. Request List")
-num_p = st.number_input("How many shopkeepers?", 1, 15, 3)
+num_p = st.number_input("How many shopkeepers?", 1, 15, 1)
 
 people_data = []
 total_requested = 0
 for i in range(num_p):
     c1, c2 = st.columns([2, 1])
-    name = c1.text_input(f"Name", f"Shopkeeper {chr(65+i)}", key=f"n{i}")
-    wants = c2.number_input(f"500s", 1, 10, 2, key=f"w{i}")
+    name = c1.text_input(f"Name", f"Shopkeeper {i+1}", key=f"n{i}")
+    wants = c2.number_input(f"Number of 500s", 1, 10, 1, key=f"w{i}")
     total_requested += (wants * 500)
     people_data.append({
         "name": name, 
-        "original_wants": wants, 
         "current_wants": wants, 
         "returned": 0,
         "notes_received": {200:0, 100:0, 50:0, 20:0, 10:0}
     })
 
-st.metric("Total Requested Amount", f"₹{total_requested}")
+st.metric("Total Requested", f"₹{total_requested}")
 
 # --- 3. The Logic Engine ---
 if st.button("Calculate Final Distribution", type="primary"):
     
-    # PHASE A: REDUCTION LOGIC (If plate is short)
+    # PHASE A: REDUCTION (If plate is short)
     current_val = sum(p["current_wants"] for p in people_data) * 500
     while current_val > total_plate:
-        # Rule: Only take from those who have more than 1 first
+        # Take from those with > 1 note first
         candidates = [p for p in people_data if p["current_wants"] > 1]
-        
         if not candidates:
-            # If everyone is at 1 but we are still short, take from anyone left
             candidates = [p for p in people_data if p["current_wants"] > 0]
-        
         if not candidates: break
 
-        # Rule: Target the person with the HIGHEST current number of 500s
+        # Target the one with the MOST 500s
         max_val = max(p["current_wants"] for p in candidates)
         top_tier = [p for p in candidates if p["current_wants"] == max_val]
-        chosen = random.choice(top_tier) # Random if all counts are equal
+        chosen = random.choice(top_tier)
         
         chosen["current_wants"] -= 1
         chosen["returned"] += 1
@@ -71,7 +67,7 @@ if st.button("Calculate Final Distribution", type="primary"):
         for _ in range(p["current_wants"]):
             slots.append({"p_idx": p_idx, "val": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
 
-    # Priority order: 10s, 20s, 50s...
+    # Priority: 10s, then 20s, then 50s
     for denom in [10, 20, 50, 100, 200]:
         while temp_inv[denom] > 0:
             added_any = False
@@ -83,33 +79,32 @@ if st.button("Calculate Final Distribution", type="primary"):
                     added_any = True
             if not added_any: break
 
-    # PHASE C: FINAL TALLY
+    # PHASE C: FINAL TALLY & CLEANUP
     for s in slots:
+        p = people_data[s["p_idx"]]
         if s["val"] == 500:
-            p = people_data[s["p_idx"]]
             for d in [10, 20, 50, 100, 200]:
                 p["notes_received"][d] += s["notes"][d]
         else:
-            # If the plate didn't have enough to finish this specific 500
-            p = people_data[s["p_idx"]]
+            # Revert incomplete 500s
             p["current_wants"] -= 1
             p["returned"] += 1
+            for d, count in s["notes"].items():
+                temp_inv[d] += count
 
     # --- 4. DISPLAY RESULTS ---
     st.divider()
     
-    # Section for Returns
-    st.subheader("⚠️ Returns Due to Lack of Change")
-    has_returns = False
+    st.subheader("⚠️ Status")
+    returns_found = False
     for p in people_data:
         if p["returned"] > 0:
-            st.error(f"**{p['name']}**: {p['returned']} note(s) of 500rs given back.")
-            has_returns = True
-    if not has_returns:
-        st.success("No notes were returned. All requests fulfilled!")
+            st.error(f"**{p['name']}**: {p['returned']} note(s) given back due to lack of change.")
+            returns_found = True
+    if not returns_found:
+        st.success("All exchanges fulfilled.")
 
-    # Section for Distributions
-    st.subheader("💰 Distribution Breakdown")
+    st.subheader("💰 Individual Breakdown")
     for p in people_data:
         with st.expander(f"👤 {p['name']} (Successfully Exchanged: {p['current_wants']})"):
             if p["current_wants"] > 0:
@@ -117,6 +112,6 @@ if st.button("Calculate Final Distribution", type="primary"):
                     if p["notes_received"][d] > 0:
                         st.write(f"**{d}rs:** {p['notes_received'][d]} notes")
             else:
-                st.info("Empty handed (Wait for next collection).")
+                st.write("No exchange possible.")
 
-    st.info(f"**Remaining in Plate:** ₹{sum(k*v for k,v in temp_inv.items())}")
+    st.info(f"**Plate Remaining:** ₹{sum(k*v for k,v in temp_inv.items())}")
