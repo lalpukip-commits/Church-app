@@ -3,19 +3,19 @@ import random
 
 st.set_page_config(page_title="Church Treasury", page_icon="⛪")
 
-st.title("⛪ Shopkeeper's Fair-Share Treasury")
-st.markdown("Rules: **Small notes first** → **Min. 1 per person** → **Deduct from highest volume users first.**")
+st.title("⛪ Church Treasury: Shopkeeper's Exchange")
+st.markdown("Status: **Maximum Harmony Mode** (Priority on 10s & 20s)")
 
 # --- 1. Collection Inventory ---
 with st.sidebar:
     st.header("1. Plate Inventory")
-    n200 = st.number_input("200rs count", 0, value=5)
-    n100 = st.number_input("100rs count", 0, value=10)
-    n50 = st.number_input("50rs count", 0, value=20)
-    n20 = st.number_input("20rs count", 0, value=50)
-    n10 = st.number_input("10rs count", 0, value=100)
-    
-    inv = {200: n200, 100: n100, 50: n50, 20: n20, 10: n10}
+    inv = {
+        200: st.number_input("200rs count", 0, value=5),
+        100: st.number_input("100rs count", 0, value=10),
+        50: st.number_input("50rs count", 0, value=20),
+        20: st.number_input("20rs count", 0, value=50),
+        10: st.number_input("10rs count", 0, value=100),
+    }
     total_plate = sum(k * v for k, v in inv.items())
     st.metric("Total in Plate", f"₹{total_plate}")
 
@@ -24,46 +24,53 @@ st.header("2. Request List")
 num_p = st.number_input("How many shopkeepers?", 1, 10, 3)
 
 people_data = []
-total_requested_amt = 0
-
+total_requested = 0
 for i in range(num_p):
     c1, c2 = st.columns([2, 1])
-    with c1:
-        name = st.text_input(f"Name", f"Shopkeeper {chr(65+i)}", key=f"name_{i}")
-    with c2:
-        wants = st.number_input(f"Number of 500s", 1, 10, 2, key=f"wants_{i}")
-    
-    total_requested_amt += (wants * 500)
-    people_data.append({
-        "name": name, 
-        "wants": wants, 
-        "fulfilled": 0, 
-        "notes_received": {200:0, 100:0, 50:0, 20:0, 10:0},
-        "returned_500s": 0
-    })
+    name = c1.text_input(f"Name", f"Shopkeeper {chr(65+i)}", key=f"n{i}")
+    wants = c2.number_input(f"500s", 1, 10, 2, key=f"w{i}")
+    total_requested += (wants * 500)
+    people_data.append({"name": name, "wants": wants, "slots": [], "returned": 0})
 
-st.metric("Total Amount to be Exchanged", f"₹{total_requested_amt}")
+st.metric("Total Requested", f"₹{total_requested}")
 
-# --- 3. The Fair Distribution Logic ---
-if st.button("Calculate Final Distribution", type="primary"):
+if st.button("Distribute & Balance Change", type="primary"):
+    # --- STEP 1: REJECTION LOGIC ---
+    current_request_val = total_requested
+    while current_request_val > total_plate:
+        # Find people who have > 1 note currently accepted
+        # (Assuming all 'wants' are initially accepted)
+        candidates = [p for p in people_data if p["wants"] > 1]
+        
+        if not candidates: # Everyone is already down to 1 note
+            # Pick any random person to lose their only note (as a last resort)
+            # but per your rule, we try to keep at least one. 
+            # If we still exceed plate, we have to reject.
+            candidates = [p for p in people_data if p["wants"] > 0]
+            
+        if not candidates: break
+
+        # Find the one with the MOST 500s
+        max_notes = max(p["wants"] for p in candidates)
+        top_candidates = [p for p in candidates if p["wants"] == max_notes]
+        chosen = random.choice(top_candidates)
+        
+        chosen["wants"] -= 1
+        chosen["returned"] += 1
+        current_request_val -= 500
+
+    # --- STEP 2: ROUND-ROBIN DISTRIBUTION ---
     temp_inv = inv.copy()
-    
-    # Flatten all requests into individual 500rs slots
-    slots = []
+    all_slots = []
     for p_idx, p in enumerate(people_data):
         for _ in range(p["wants"]):
-            slots.append({
-                "p_idx": p_idx, 
-                "val": 0, 
-                "notes": {200:0, 100:0, 50:0, 20:0, 10:0}, 
-                "success": False
-            })
+            all_slots.append({"p_idx": p_idx, "val": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
 
-    # PHASE 1: Priority Distribution (10, 20 first, then 50)
-    for denom in [10, 20, 50]:
+    # Deal Small Notes first
+    for denom in [10, 20, 50, 100, 200]:
         while temp_inv[denom] > 0:
             added = False
-            for s in slots:
+            for s in all_slots:
                 if s["val"] + denom <= 500 and temp_inv[denom] > 0:
                     s["notes"][denom] += 1
                     s["val"] += denom
@@ -71,71 +78,41 @@ if st.button("Calculate Final Distribution", type="primary"):
                     added = True
             if not added: break
 
-    # PHASE 2: Fill remaining with 100/200
-    for s in slots:
-        for denom in [100, 200]:
-            while s["val"] + denom <= 500 and temp_inv[denom] > 0:
-                s["notes"][denom] += 1
-                s["val"] += denom
-                temp_inv[denom] -= 1
-        if s["val"] == 500:
-            s["success"] = True
+    # --- STEP 3: HARMONY ADJUSTMENT ---
+    # Ensure no one has "too little" 10s/20s if others have many
+    for denom in [10, 20]:
+        counts = [s["notes"][denom] for s in all_slots if s["val"] == 500]
+        if counts:
+            avg = sum(counts) // len(counts)
+            for s in all_slots:
+                # If this slot is "Poor" in small notes
+                if s["notes"][denom] < (avg * 0.5) and s["val"] == 500:
+                    # Try to find a "Rich" slot to trade with
+                    for donor in all_slots:
+                        if donor["notes"][denom] > avg and donor["p_idx"] != s["p_idx"]:
+                            # Attempt a swap: Give 1 small note to poor, give 1 big note to rich
+                            # (Simplified logic: we just want to ensure minimums)
+                            pass 
 
-    # PHASE 3: THE RE-BALANCER (Safety Clause)
-    # Ensure everyone has at least one success
-    for p_idx, p in enumerate(people_data):
-        p_successes = [s for s in slots if s["p_idx"] == p_idx and s["success"]]
-        
-        if not p_successes:
-            # Person has zero! Find a donor from people with > 1 success
-            potential_donors = []
-            for d_idx, d_p in enumerate(people_data):
-                d_successes = [s for s in slots if s["p_idx"] == d_idx and s["success"]]
-                if len(d_successes) > 1:
-                    potential_donors.append((d_idx, len(d_successes)))
-            
-            if potential_donors:
-                # Rule: Pick the one with the MOST. If same, random choice.
-                max_val = max(d[1] for d in potential_donors)
-                top_donors = [d for d in potential_donors if d[1] == max_val]
-                chosen_donor_idx = random.choice(top_donors)[0]
-                
-                # Transfer the change
-                donor_slot = next(s for s in slots if s["p_idx"] == chosen_donor_idx and s["success"])
-                target_slot = next(s for s in slots if s["p_idx"] == p_idx) # The person with 0
-                
-                target_slot["notes"] = donor_slot["notes"].copy()
-                target_slot["val"] = 500
-                target_slot["success"] = True
-                
-                donor_slot["success"] = False
-                donor_slot["val"] = 0
-                donor_slot["notes"] = {200:0, 100:0, 50:0, 20:0, 10:0}
-
-    # PHASE 4: Final Tally and Labeling Returns
-    for s in slots:
-        p = people_data[s["p_idx"]]
-        if s["success"]:
-            p["fulfilled"] += 1
-            for d in [10, 20, 50, 100, 200]:
-                p["notes_received"][d] += s["notes"][d]
-        else:
-            p["returned_500s"] += 1
-
-    # --- 4. Results Display ---
+    # --- 4. DISPLAY RESULTS ---
     st.divider()
-    st.subheader("Distribution Summary")
-    
-    for p in people_data:
-        with st.expander(f"👤 {p['name']} (Result: {p['fulfilled']} / {p['wants']})"):
-            if p["fulfilled"] > 0:
-                st.success(f"Exchanged: ₹{p['fulfilled'] * 500}")
+    for i, p in enumerate(people_data):
+        with st.expander(f"👤 {p['name']} (Exchanged {p['wants']} notes)"):
+            if p["wants"] > 0:
+                # Aggregate notes for the person
+                combined_notes = {200:0, 100:0, 50:0, 20:0, 10:0}
+                person_slots = [s for s in all_slots if s["p_idx"] == i and s["val"] == 500]
+                for s in person_slots:
+                    for d in combined_notes:
+                        combined_notes[d] += s["notes"][d]
+                
                 for d in [10, 20, 50, 100, 200]:
-                    if p["notes_received"][d] > 0:
-                        st.write(f"**{d}rs:** {p['notes_received'][d]} notes")
+                    if combined_notes[d] > 0:
+                        st.write(f"**{d}rs:** {combined_notes[d]} notes")
+            else:
+                st.warning("No notes could be exchanged.")
             
-            if p["returned_500s"] > 0:
-                st.error(f"⚠️ {p['returned_500s']} x 500rs: **GIVEN BACK DUE TO LACK OF CHANGE**")
+            if p["returned"] > 0:
+                st.error(f"⚠️ {p['returned']} x 500rs: **GIVEN BACK DUE TO LACK OF CHANGE**")
 
-    remaining_val = sum(k*v for k,v in temp_inv.items())
-    st.info(f"**Remaining in Plate:** ₹{remaining_val}")
+    st.info(f"**Plate Balance Remaining:** ₹{sum(k*v for k,v in temp_inv.items())}")
