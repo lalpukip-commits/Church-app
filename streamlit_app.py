@@ -4,9 +4,9 @@ import random
 st.set_page_config(page_title="Church Treasury", page_icon="⛪")
 
 st.title("⛪ Church Treasury Logic")
-st.markdown("Status: **Maximum Harmony Mode** (Fair 10s & 20s mixing)")
+st.info("Goal: Fair small notes first, then fill the rest with whatever is available.")
 
-# --- 1. Collection Inventory (0 presets) ---
+# --- 1. Inventory ---
 with st.sidebar:
     st.header("1. Plate Inventory")
     n200 = st.number_input("200rs count", 0, value=0)
@@ -19,97 +19,76 @@ with st.sidebar:
     total_plate = sum(k * v for k, v in inv.items())
     st.metric("Total in Plate", f"₹{total_plate}")
 
-# --- 2. Exchange Requests ---
+# --- 2. Requests ---
 st.header("2. Request List")
 num_p = st.number_input("How many shopkeepers?", 1, 15, 1)
 
 people_data = []
-total_requested_amt = 0
 for i in range(num_p):
     c1, c2 = st.columns([2, 1])
     name = c1.text_input(f"Name", f"Shopkeeper {i+1}", key=f"n{i}")
     wants = c2.number_input(f"500s", 1, 10, 1, key=f"w{i}")
-    total_requested_amt += (wants * 500)
-    people_data.append({
-        "name": name, 
-        "current_wants": wants, 
-        "returned": 0,
-        "notes_received": {200:0, 100:0, 50:0, 20:0, 10:0}
-    })
+    people_data.append({"name": name, "wants": wants, "got": 0, "returned": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
 
-st.metric("Total Requested", f"₹{total_requested_amt}")
-
-# --- 3. The Engine ---
-if st.button("Calculate Final Distribution", type="primary"):
-    
-    # PHASE A: REJECTION (Take from those with the most)
-    current_val = sum(p["current_wants"] for p in people_data) * 500
-    while current_val > total_plate:
-        candidates = [p for p in people_data if p["current_wants"] > 1]
-        if not candidates:
-            candidates = [p for p in people_data if p["current_wants"] > 0]
-        if not candidates: break
-
-        max_val = max(p["current_wants"] for p in candidates)
-        top_tier = [p for p in candidates if p["current_wants"] == max_val]
-        chosen = random.choice(top_tier)
-        
-        chosen["current_wants"] -= 1
-        chosen["returned"] += 1
-        current_val -= 500
-
-    # PHASE B: ROUND ROBIN (Harmony)
+# --- 3. The Logic ---
+if st.button("Distribute Now", type="primary"):
     temp_inv = inv.copy()
-    slots = []
+    
+    # PHASE 1: REJECTION (Take from those with most if short)
+    current_req = sum(p["wants"] for p in people_data) * 500
+    while current_req > total_plate:
+        # Prioritize taking from those with > 1 note
+        rich = [p for p in people_data if p["wants"] > 1]
+        target = random.choice(rich) if rich else random.choice([p for p in people_data if p["wants"] > 0])
+        target["wants"] -= 1
+        target["returned"] += 1
+        current_req -= 500
+
+    # Create individual 500rs "buckets"
+    buckets = []
     for p_idx, p in enumerate(people_data):
-        for _ in range(p["current_wants"]):
-            slots.append({"p_idx": p_idx, "val": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
+        for _ in range(p["wants"]):
+            buckets.append({"p_idx": p_idx, "sum": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
 
-    # Small notes first for fairness
-    for denom in [10, 20, 50]:
-        while temp_inv[denom] > 0:
-            added = False
-            for s in slots:
-                if s["val"] + denom <= 500 and temp_inv[denom] > 0:
-                    s["notes"][denom] += 1
-                    s["val"] += denom
-                    temp_inv[denom] -= 1
-                    added = True
-            if not added: break
+    # PHASE 2: HARMONY DEAL (10s, 20s, 50s one by one)
+    for d in [10, 20, 50]:
+        while temp_inv[d] > 0:
+            changed = False
+            for b in buckets:
+                if b["sum"] + d <= 500 and temp_inv[d] > 0:
+                    b["notes"][d] += 1
+                    b["sum"] += d
+                    temp_inv[d] -= 1
+                    changed = True
+            if not changed: break
 
-    # PHASE C: TOP UP (Ensure slots hit 500)
-    for s in slots:
-        for denom in [200, 100, 50, 20, 10]:
-            while s["val"] + denom <= 500 and temp_inv[denom] > 0:
-                s["notes"][denom] += 1
-                s["val"] += denom
-                temp_inv[denom] -= 1
+    # PHASE 3: AGGRESSIVE FILL (Finish the 500s with anything left)
+    for b in buckets:
+        for d in [200, 100, 50, 20, 10]:
+            while b["sum"] + d <= 500 and temp_inv[d] > 0:
+                b["notes"][d] += 1
+                b["sum"] += d
+                temp_inv[d] -= 1
 
-    # PHASE D: FINAL SETTLEMENT
-    for s in slots:
-        p = people_data[s["p_idx"]]
-        if s["val"] == 500:
+    # PHASE 4: FINAL SETTLE
+    for b in buckets:
+        p = people_data[b["p_idx"]]
+        if b["sum"] == 500:
+            p["got"] += 1
             for d in [10, 20, 50, 100, 200]:
-                p["notes_received"][d] += s["notes"][d]
+                p["notes"][d] += b["notes"][d]
         else:
-            p["current_wants"] -= 1
-            p["returned"] += 1
+            p["returned"] += 1 # Only if plate is truly empty
 
     # --- 4. DISPLAY ---
     st.divider()
-    st.subheader("⚠️ Returns Status")
     for p in people_data:
         if p["returned"] > 0:
-            st.warning(f"**{p['name']}**: {p['returned']} note(s) given back due to lack of change.")
-
-    st.subheader("💰 Results")
-    for p in people_data:
-        with st.expander(f"👤 {p['name']} (Exchanged: {p['current_wants']})"):
-            if p["current_wants"] > 0:
+            st.error(f"⚠️ **{p['name']}**: {p['returned']} note(s) given back (lack of change).")
+        
+        with st.expander(f"👤 {p['name']} (Exchanged: {p['got']})"):
+            if p["got"] > 0:
                 for d in [200, 100, 50, 20, 10]:
-                    if p["notes_received"][d] > 0:
-                        st.write(f"**{d}rs:** {p['notes_received'][d]} notes")
-            else:
-                st.write("No exchange possible.")
-
-    st.info(f"**Plate Leftover:** ₹{sum(k*v for k,v in temp_inv.items())}")
+                    if p["notes"][d] > 0:
+                        st.write(f"**{d}rs:** {p['notes'][d]} notes")
+            else: st.write("No notes exchanged.")
