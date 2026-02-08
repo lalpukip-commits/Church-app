@@ -1,112 +1,94 @@
 import streamlit as st
-import pandas as pd
 
-st.set_page_config(page_title="Church Treasury", page_icon="⛪", layout="wide")
+st.set_page_config(page_title="Church Treasury", page_icon="⛪")
 
-st.title("⛪ Church Treasury Optimizer")
-st.markdown("> **Fair Distribution Mode:** Small denominations are distributed evenly across all requests to ensure the most people get change.")
+st.title("⛪ Fair-Share Treasury Logic")
+st.markdown("Strategy: **Round-Robin Fulfillment**. Everyone gets their 1st note swapped before anyone gets their 2nd.")
 
 # --- 1. Collection Inventory ---
 with st.sidebar:
     st.header("1. Plate Inventory")
-    inv = {
-        200: st.number_input("200rs count", 0, value=10),
-        100: st.number_input("100rs count", 0, value=10),
-        50: st.number_input("50rs count", 0, value=10),
-        20: st.number_input("20rs count", 0, value=20),
-        10: st.number_input("10rs count", 0, value=50),
-    }
+    n200 = st.number_input("200rs count", 0, value=10)
+    n100 = st.number_input("100rs count", 0, value=10)
+    n50 = st.number_input("50rs count", 0, value=10)
+    n20 = st.number_input("20rs count", 0, value=20)
+    n10 = st.number_input("10rs count", 0, value=50)
+    
+    inv = {200: n200, 100: n100, 50: n50, 20: n20, 10: n10}
     total_plate = sum(k * v for k, v in inv.items())
     st.metric("Total in Plate", f"₹{total_plate}")
 
 # --- 2. Exchange Requests ---
-st.header("2. Exchange Requests")
-num_p = st.number_input("Number of people requesting change:", 1, 20, 3)
+st.header("2. Request List")
+num_p = st.number_input("How many people?", 1, 10, 3)
 
 people_data = []
-cols = st.columns(3)
 for i in range(num_p):
-    with cols[i % 3]:
-        st.subheader(f"Person {i+1}")
-        name = st.text_input(f"Name", f"Member {i+1}", key=f"n_{i}")
-        wants = st.number_input(f"Number of 500s to swap", 1, 10, 1, key=f"w_{i}")
-        people_data.append({
-            "name": name, 
-            "wants": wants, 
-            "notes": {200:0, 100:0, 50:0, 20:0, 10:0}, 
-            "fulfilled": 0
-        })
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        name = st.text_input(f"Name", f"Person {chr(65+i)}", key=f"name_{i}")
+    with c2:
+        wants = st.number_input(f"500s to swap", 1, 10, 1, key=f"wants_{i}")
+    # Initialize person object
+    people_data.append({
+        "name": name, 
+        "wants": wants, 
+        "fulfilled_count": 0, 
+        "received_notes": {200:0, 100:0, 50:0, 20:0, 10:0}
+    })
 
-# --- 3. Optimized Distribution Logic ---
-if st.button("Distribute Change", type="primary", use_container_width=True):
+# --- 3. The Fair Distribution Logic ---
+if st.button("Distribute Equivalently", type="primary"):
     temp_inv = inv.copy()
     
-    # Flatten requests into individual 500rs "slots"
-    slots = []
-    for p_idx, p in enumerate(people_data):
-        for _ in range(p["wants"]):
-            slots.append({"p_idx": p_idx, "val": 0, "notes": {200:0, 100:0, 50:0, 20:0, 10:0}})
+    # We determine the maximum number of notes anyone wants to set the number of rounds
+    max_rounds = max(p["wants"] for p in people_data)
+    
+    # ROUND-ROBIN: We process the "First 500" for everyone, then the "Second 500", etc.
+    for round_num in range(max_rounds):
+        for p in people_data:
+            # Check if this person still needs a note in this round
+            if p["fulfilled_count"] < p["wants"]:
+                
+                # Attempt to build ONE 500rs note from the remaining inventory
+                current_fill = 0
+                temp_bag = {200:0, 100:0, 50:0, 20:0, 10:0}
+                
+                # Use Greedy approach for the individual 500rs build
+                for denom in [200, 100, 50, 20, 10]:
+                    while current_fill + denom <= 500 and temp_inv[denom] > 0:
+                        temp_bag[denom] += 1
+                        temp_inv[denom] -= 1
+                        current_fill += denom
+                
+                # Success Check: Did we manage to reach exactly 500?
+                if current_fill == 500:
+                    p["fulfilled_count"] += 1
+                    for d in temp_bag:
+                        p["received_notes"][d] += temp_bag[d]
+                else:
+                    # Failure: Not enough change left for a full 500. 
+                    # Return notes to the inventory for someone else to potentially use.
+                    for d, count in temp_bag.items():
+                        temp_inv[d] += count
 
-    # PHASE 1: Fair Distribution of small/scarce notes (10, 20, 50)
-    # We deal these round-robin style
-    for denom in [50, 20, 10]:
-        while temp_inv[denom] > 0:
-            added_this_round = False
-            for s in slots:
-                if s["val"] + denom <= 500 and temp_inv[denom] > 0:
-                    s["notes"][denom] += 1
-                    s["val"] += denom
-                    temp_inv[denom] -= 1
-                    added_this_round = True
-            if not added_this_round: break
-
-    # PHASE 2: Efficient Topping (200, 100)
-    # Use larger notes to complete the 500rs requirement for as many slots as possible
-    for s in slots:
-        for denom in [200, 100, 50, 20, 10]:
-            while s["val"] + denom <= 500 and temp_inv[denom] > 0:
-                s["notes"][denom] += 1
-                s["val"] += denom
-                temp_inv[denom] -= 1
-
-    # PHASE 3: Settlement
-    # Only finalize slots that reached exactly 500. Return others to plate.
-    for s in slots:
-        p = people_data[s["p_idx"]]
-        if s["val"] == 500:
-            p["fulfilled"] += 1
-            for d in p["notes"]:
-                p["notes"][d] += s["notes"][d]
-        else:
-            # Partial fills are invalid for a 500rs swap, return to inventory
-            for d, count in s["notes"].items():
-                temp_inv[d] += count
-
-    # --- 4. Results Display ---
+    # --- 4. Results ---
     st.divider()
+    st.subheader("Results")
     
-    # Summary Table
-    results = []
     for p in people_data:
-        results.append({
-            "Name": p["name"],
-            "Requested": p["wants"],
-            "Fulfilled": p["fulfilled"],
-            "Status": "✅ Full" if p["fulfilled"] == p["wants"] else "⚠️ Partial" if p["fulfilled"] > 0 else "❌ Failed"
-        })
-    
-    st.dataframe(pd.DataFrame(results), use_container_width=True)
-
-    # Detailed Breakdown
-    st.subheader("Detailed Breakdown")
-    for p in people_data:
-        if p["fulfilled"] > 0:
-            with st.expander(f"💰 {p['name']} - Received ₹{p['fulfilled']*500}"):
-                c = st.columns(5)
-                for idx, (denom, count) in enumerate(p["notes"].items()):
+        status_color = "green" if p["fulfilled_count"] == p["wants"] else "orange"
+        if p["fulfilled_count"] == 0: status_color = "red"
+        
+        with st.expander(f"👤 {p['name']} (Got {p['fulfilled_count']} of {p['wants']})"):
+            if p["fulfilled_count"] > 0:
+                st.write(f"**Total Received:** ₹{p['fulfilled_count'] * 500}")
+                # Show note breakdown
+                for d, count in p["received_notes"].items():
                     if count > 0:
-                        c[idx % 5].metric(f"{denom}rs", f"x{count}")
-        elif p["wants"] > 0:
-            st.warning(f"Could not fulfill any requests for {p['name']}.")
+                        st.write(f"- {d}rs notes: {count}")
+            else:
+                st.error("No change available for this person.")
 
-    st.info(f"**Plate Balance Remaining:** ₹{sum(k*v for k,v in temp_inv.items())}")
+    remaining_val = sum(k*v for k,v in temp_inv.items())
+    st.info(f"**Remaining in Plate:** ₹{remaining_val}")
